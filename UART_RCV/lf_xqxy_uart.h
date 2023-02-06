@@ -4,7 +4,7 @@
  * @Author: Newt
  * @Date: 2023-01-10 10:11:32
  * @LastEditors: Newt
- * @LastEditTime: 2023-01-28 14:06:59
+ * @LastEditTime: 2023-01-31 10:29:32
  */
 /*
 * Copyright (c) 2021 Leapfive.
@@ -53,12 +53,10 @@ typedef struct
     uint8_t uni_ide[5];  //唯一标识
 }lf_mod_info;
 
-#define UART_FRAME_LEN_BYTE         1                       //帧长字节长度
 #define UART_FRAME_HEAD_LEN         4                      //有效帧头长度，包括帧长和帧长之前的数据长度
 #define UART_FRAME_TYPE_INDEX       1                       //帧类型数据位偏移
 #define UART_FRAME_LEN_INDEX        3                       //帧长数据位偏移
 #define UART_OTHER_DATA_LEN         5                      //其余数据总长(有效数据除外)
-#define UART_DISC_TIME              (3 * 1000)              //串口断开连接时间
 #define RCV_DATA_LEN                150                     //串口接收数据大小
 #define SEND_DATA_LEN               150                     //串口接收数据大小
 #define UART_BAUD                   9600                    //串口波特率

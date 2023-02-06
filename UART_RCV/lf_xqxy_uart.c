@@ -62,7 +62,7 @@ static uint8_t data_check(uint8_t *ptr, uint8_t len)
  * @param  无
  * @return 0：成功 -1：失败
  */
-void uart1_cfg(int fd, void *param)
+static void uart1_cfg(int fd, void *param)
 {
     int ret = -1;
 
@@ -73,27 +73,6 @@ void uart1_cfg(int fd, void *param)
 
     lf_uart_setconfig(1, UART_BAUD, UART_PARITY_EVEN);
 }
-
-/**
- * @brief  设置ID信息数据域
- * @param  
- * @return 0：成功 -1：失败
- */
-uint8_t lf_uart1_set_id(lf_mod_info id_info)
-{
-    memset(id_buf, 0, sizeof(id_buf));
-    id_buf[0]=id_info.ptl_ver;
-    id_buf[1]=id_info.lock_ver;
-    id_buf[2]=id_info.sw_ver;
-    id_buf[3]=id_info.ted;
-    id_buf[4]=id_info.fac_num;
-    id_buf[5]=id_info.xh_num;
-    id_buf[6]=id_info.batch_num;
-    memcpy(id_buf + 7, id_info.uni_ide, sizeof(id_info.uni_ide));
-
-    return 0; 
-}
-
 
 /**
  * @brief: pack electric data
@@ -158,16 +137,16 @@ static void pack_send_buf(uint8_t *buf, uint8_t buf_len, uint8_t head, uint8_t c
 /**
  * @brief: ensure uart send data integrity and set timeout
  * @param {int} fd
- * @param {uint8_t} *data
+ * @param {const uint8_t} *data
  * @param {uint8_t} len
  * @param {uint32_t} timeout_ms
  * @return {*} 0 success
  */
-static int uart_write_data(int fd, uint8_t *data, uint8_t len, uint32_t timeout_ms)
+static int uart_write_data(int fd, const uint8_t *data, uint8_t len, uint32_t timeout_ms)
 {
     int      ret;
     uint32_t len_sent;
-    uint32_t t_end, t_left;
+    uint32_t t_end;
 
     t_end    = xTaskGetTickCount() + timeout_ms;
     len_sent = 0;
@@ -541,7 +520,7 @@ static uint8_t uart1_send_package(uint8_t func_id)
         case ELEC_FIND:
             {
                 //用电数据查询
-                data_len = ID_DATA_LEN + 23;
+                data_len = ID_DATA_LEN + 11;
                 buf_len = data_len + UART_OTHER_DATA_LEN;
                 /* assign value about active power and electric quantity */
                 uint8_t time_stamp[4] = {0};
@@ -551,14 +530,14 @@ static uint8_t uart1_send_package(uint8_t func_id)
                 memcpy(valid_buf, time_stamp, 4);
                 pack_valid_data(valid_buf + 4, active_power, 3);
                 pack_valid_data(valid_buf + 4 + 3, power, 4);
-                memcpy(data_buf + data_buf_offset, valid_buf, 23);
+                memcpy(data_buf + data_buf_offset, valid_buf, 11);
                 pack_send_buf(send_buf, buf_len, AWAKEN_HEAD, AWAKEN_READ, func_id, data_buf, data_len);
                 break;
             }
         case OPPO_FIND:
             {
                 //数据反向查询
-                data_len = ID_DATA_LEN + 23;
+                data_len = ID_DATA_LEN + 11;
                 buf_len = data_len + UART_OTHER_DATA_LEN;
                 /* assign value about active power and electric quantity */
                 uint8_t time_stamp[4] = {0};
@@ -568,7 +547,7 @@ static uint8_t uart1_send_package(uint8_t func_id)
                 memcpy(valid_buf, time_stamp, 4);
                 pack_valid_data(valid_buf + 4, active_power, 3);
                 pack_valid_data(valid_buf + 4 + 3, power, 4);
-                memcpy(data_buf + data_buf_offset, valid_buf, 23);
+                memcpy(data_buf + data_buf_offset, valid_buf, 11);
                 pack_send_buf(send_buf, buf_len, AWAKEN_HEAD, AWAKEN_READ, func_id, data_buf, data_len);
                 break;
             }
@@ -664,7 +643,7 @@ static int8_t uart1_recv_data_parse(uint8_t *data, uint8_t total_len, uint8_t cm
             return -1;
         }
     }
-    /* check CRC */
+    /* check */
     uint8_t crc = data_check(data, total_len-1);
     printf("crc ================== %02x\r\n",crc);
     if (crc != data[total_len-1]) {
@@ -742,113 +721,81 @@ static int8_t uart1_recv_data_parse(uint8_t *data, uint8_t total_len, uint8_t cm
 }
 
 /**
- * @brief  串口0数据接收数据处理线程
- * @param  无
- * @return 无
+ * @brief: uart1 receive packets task
+ * @param {int} fd
+ * @param {void} *pvParameters
+ * @return {*}
  */
-static void uart1_task_proc(int fd, void *pvParameters)
+static void uart1_read_task(int fd, void *pvParameters)
 {
-    static uint8_t uart_recv_data[RCV_DATA_LEN] = {0};        //串口数据存储区
-    static uint8_t uart_recv_len = 0;                               //串口接收数据长度
-    static uint8_t frame_valid_data[RCV_DATA_LEN] = {0};      //有效数据帧存储区
-    #if (UART_FRAME_LEN_BYTE == 2)
-    static uint16_t frame_total_len = 0;                            //数据帧总长度
-    static uint16_t frame_current_len = 0;                          //当前接收数据帧长度
-    static uint16_t frame_remain_len = 0;                           //剩余数据帧长度
-    #elif (UART_FRAME_LEN_BYTE == 1)
-    static uint8_t frame_total_len = 0;                             //数据帧总长度
-    static uint8_t frame_current_len = 0;                           //当前接收数据帧长度
-    static uint8_t frame_remain_len = 0;                            //剩余数据帧长度 
-    #endif
-    static uint8_t frame_start_index = 0;                           //有效数据起始位置
-    uint32_t discon_timestamp = xTaskGetTickCount();         //uart离线计数
+    static uint8_t recv_buf[RCV_DATA_LEN] = {0};
+    static uint8_t recv_len = 0;
+    int16_t ret = 0;
+    uint8_t data_len = 0;
+    uint16_t index = 0;
 
-    //读取MCU返回的数据
-    if ((uart_recv_len = aos_read(uart_fd, uart_recv_data, sizeof(uart_recv_data))) > 0) {
-        printf("recv data = ");
-        for (uint8_t i = 0; i < uart_recv_len; i++) {
-            printf("%02x ", uart_recv_data[i]);
-        }
-        printf("\r\n");
-
-        for (frame_start_index = 0; frame_start_index < uart_recv_len; frame_start_index++) {
-            //判断是否已经收到数据头以及有效数据
-            if (strlen((char *)frame_valid_data) > 0) {
-                //已收到部分数据后将剩余数据拼接起来
-                if (frame_current_len < UART_FRAME_HEAD_LEN) {
-                    #if (UART_FRAME_LEN_BYTE == 2)
-                    if (UART_FRAME_HEAD_LEN - frame_current_len > 1) {
-                        frame_total_len += (uart_recv_data[UART_FRAME_HEAD_LEN - frame_current_len - UART_FRAME_LEN_BYTE] << 8) +
-                                            uart_recv_data[UART_FRAME_HEAD_LEN - frame_current_len - UART_FRAME_LEN_BYTE + 1];
-                    }else {
-                        frame_total_len += (frame_valid_data[UART_FRAME_LEN_INDEX]  << 8) + uart_recv_data[0];
-                    }
-                    #elif (UART_FRAME_LEN_BYTE == 1)
-                    frame_total_len += uart_recv_data[UART_FRAME_HEAD_LEN - frame_current_len - UART_FRAME_LEN_BYTE];
-                    #endif
-                }
-                // printf("frame_current_len = %d frame_total_len = %d\r\n", frame_current_len, frame_total_len);
-                frame_remain_len = frame_total_len - frame_current_len;
-                //判断剩余部分数据长度是否大于接收数据的长度
-                if (uart_recv_len >= frame_remain_len) {
-                    memcpy((frame_valid_data + frame_current_len), uart_recv_data, frame_remain_len);
-                    frame_start_index += frame_remain_len;
-                    log_debug("cmd = %d\r\n", frame_valid_data[UART_FRAME_TYPE_INDEX]);
-                    uart1_recv_data_parse(frame_valid_data, frame_total_len, frame_valid_data[UART_FRAME_TYPE_INDEX]);
-                    memset(frame_valid_data, 0, sizeof(frame_valid_data));
-                    frame_total_len = 0;
-                    frame_current_len = 0;
-                }else {
-                    memcpy((frame_valid_data + frame_current_len), uart_recv_data, uart_recv_len);
-                    frame_start_index += uart_recv_len;
-                    frame_current_len +=  uart_recv_len;
-                }
-            }
-            //检测到数据头后开始存储数据
-            if (uart_recv_data[frame_start_index] == AWAKEN_HEAD) {
-                frame_current_len += uart_recv_len - frame_start_index;
-                //判断收到的数据是否有长度数据位
-                if (frame_current_len < UART_FRAME_HEAD_LEN) {
-                    //若接收到数无长度位，设置默认长度
-                    frame_total_len = UART_OTHER_DATA_LEN;
-                }else {
-                    #if (UART_FRAME_LEN_BYTE == 2)
-                    frame_total_len = (uart_recv_data[frame_start_index + UART_FRAME_LEN_INDEX] << 8) +
-                                        uart_recv_data[frame_start_index + UART_FRAME_LEN_INDEX + 1] +
-                                        UART_OTHER_DATA_LEN;
-                    #elif (UART_FRAME_LEN_BYTE == 1)
-                    frame_total_len = uart_recv_data[frame_start_index + UART_FRAME_LEN_INDEX] + UART_OTHER_DATA_LEN;
-                    #endif
-                    
-                }
-                //判断是否已收到完整一帧
-                if (frame_current_len >= frame_total_len) {
-                    memcpy(frame_valid_data, uart_recv_data + frame_start_index, frame_total_len);
-                    frame_start_index += frame_total_len - 1;
-                    uart1_recv_data_parse(frame_valid_data, frame_total_len, frame_valid_data[UART_FRAME_TYPE_INDEX]);
-                    memset(frame_valid_data, 0, sizeof(frame_valid_data));
-                    frame_total_len = 0;
-                    frame_current_len = 0;
-                }else {
-                    memcpy(frame_valid_data, uart_recv_data + frame_start_index, frame_current_len);
-                    frame_start_index += frame_current_len - 1;
-                }
-            }
-        }
-
-        memset(uart_recv_data, 0, sizeof(uart_recv_data));
-        discon_timestamp = xTaskGetTickCount();
+    ret = aos_read(fd, recv_buf + recv_len, sizeof(recv_buf) - recv_len);
+    if (ret <= 0) {
+        return; // no data received
     }
     else {
-        if (xTaskGetTickCount() - discon_timestamp >= UART_DISC_TIME) {
-            memset(frame_valid_data, 0, sizeof(frame_valid_data));
-            memset(uart_recv_data, 0, sizeof(uart_recv_data));
-            frame_start_index = 0;
-            frame_total_len = 0;
-            frame_current_len = 0;
-            discon_timestamp = xTaskGetTickCount();
+        recv_len += ret;
+    }
+    // check package complete
+    while (index < recv_len)
+    {
+        if (recv_buf[index] == AWAKEN_HEAD)
+            break;
+        index++;
+    }
+    // skip no header data
+    if (index > 0) 
+    {
+        memcpy(recv_buf, recv_buf + index, recv_len - index);
+        recv_len -= index;
+    }
+    // 接收长度大于除数据内容以外的最小长度
+    while (recv_len > UART_OTHER_DATA_LEN) 
+    {
+        data_len = recv_buf[UART_FRAME_LEN_INDEX] + UART_OTHER_DATA_LEN;
+        // 至少完成一个包的接收
+        if (recv_len >= data_len) {
+            uart1_recv_data_parse(recv_buf, data_len, recv_buf[UART_FRAME_TYPE_INDEX]);
+            if (recv_len > data_len) {
+                memcpy(recv_buf, recv_buf + data_len, recv_len - data_len);
+                recv_len -= data_len;
+            }
+            else {
+                // complete parse all data
+                memset(recv_buf, 0, recv_len);
+                recv_len = 0;
+                break;
+            }
+        }
+        else {
+            break;
         }
     }
+}
+
+/**
+ * @brief  设置ID信息数据域
+ * @param  
+ * @return 0：成功 -1：失败
+ */
+uint8_t lf_uart1_set_id(lf_mod_info id_info)
+{
+    memset(id_buf, 0, sizeof(id_buf));
+    id_buf[0]=id_info.ptl_ver;
+    id_buf[1]=id_info.lock_ver;
+    id_buf[2]=id_info.sw_ver;
+    id_buf[3]=id_info.ted;
+    id_buf[4]=id_info.fac_num;
+    id_buf[5]=id_info.xh_num;
+    id_buf[6]=id_info.batch_num;
+    memcpy(id_buf + 7, id_info.uni_ide, sizeof(id_info.uni_ide));
+
+    return 0; 
 }
 
 /**
@@ -869,7 +816,7 @@ int lf_uart1_task_init(void)
     else {
         uart1_cfg(0, NULL);
         printf("Init uart1 successfully\r\n");
-        aos_poll_read_fd(uart_fd, uart1_task_proc, NULL);
+        aos_poll_read_fd(uart_fd, uart1_read_task, NULL);
     }
 
     return 0;
